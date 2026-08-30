@@ -130,6 +130,101 @@ const keys = {
   ArrowRight: false,
 };
 
+const pointerSteer = {
+  active: false,
+  x: 0,
+  y: 0,
+};
+
+let lastInput = "keyboard";
+
+function isTouchy() {
+  return lastInput === "touch" || window.matchMedia("(pointer: coarse)").matches;
+}
+
+function actionHint(keyboard, touch) {
+  return isTouchy() ? touch : keyboard;
+}
+
+function clearMoveKeys() {
+  keys.ArrowUp = false;
+  keys.ArrowDown = false;
+  keys.ArrowLeft = false;
+  keys.ArrowRight = false;
+}
+
+function canvasPointFromEvent(e) {
+  const source = e.touches && e.touches[0] ? e.touches[0] : e;
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: ((source.clientX - rect.left) / rect.width) * canvas.width,
+    y: ((source.clientY - rect.top) / rect.height) * canvas.height,
+  };
+}
+
+function startSteering(e) {
+  lastInput = e.pointerType === "mouse" ? "keyboard" : "touch";
+  if (gameState === "lost") {
+    restartCurrentLevel();
+    return;
+  }
+  if (gameState === "roundWon") {
+    startNextRound();
+    return;
+  }
+  if (gameState === "levelComplete") {
+    startNextLevel();
+    return;
+  }
+  if (gameState !== "playing") {
+    return;
+  }
+  const point = canvasPointFromEvent(e);
+  pointerSteer.active = true;
+  pointerSteer.x = point.x;
+  pointerSteer.y = point.y;
+}
+
+function moveSteering(e) {
+  if (!pointerSteer.active) {
+    return;
+  }
+  const point = canvasPointFromEvent(e);
+  pointerSteer.x = point.x;
+  pointerSteer.y = point.y;
+}
+
+function stopSteering() {
+  pointerSteer.active = false;
+  clearMoveKeys();
+}
+
+function applyPointerSteering() {
+  if (!pointerSteer.active) {
+    return;
+  }
+
+  const dx = pointerSteer.x - bee.x;
+  const dy = pointerSteer.y - bee.y;
+  const dead = bee.size * 0.22;
+  clearMoveKeys();
+
+  if (Math.abs(dx) > dead) {
+    if (dx > 0) {
+      keys.ArrowRight = true;
+    } else {
+      keys.ArrowLeft = true;
+    }
+  }
+  if (Math.abs(dy) > dead) {
+    if (dy > 0) {
+      keys.ArrowDown = true;
+    } else {
+      keys.ArrowUp = true;
+    }
+  }
+}
+
 let gameState = "playing";
 let specialFlower = null;
 let confetti = [];
@@ -1304,6 +1399,8 @@ function startNextLevel() {
 }
 
 document.addEventListener("keydown", (e) => {
+  lastInput = "keyboard";
+  pointerSteer.active = false;
   if (e.key in keys) {
     keys[e.key] = true;
     e.preventDefault();
@@ -1329,6 +1426,40 @@ document.addEventListener("keyup", (e) => {
     keys[e.key] = false;
   }
 });
+
+canvas.addEventListener(
+  "pointerdown",
+  (e) => {
+    e.preventDefault();
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch (_) {
+      /* synthetic events and some browsers skip capture */
+    }
+    startSteering(e);
+  },
+  { passive: false }
+);
+
+canvas.addEventListener(
+  "pointermove",
+  (e) => {
+    e.preventDefault();
+    moveSteering(e);
+  },
+  { passive: false }
+);
+
+canvas.addEventListener(
+  "pointerup",
+  (e) => {
+    e.preventDefault();
+    stopSteering();
+  },
+  { passive: false }
+);
+
+canvas.addEventListener("pointercancel", stopSteering);
 
 function drawSky() {
   const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
@@ -1657,6 +1788,8 @@ function updateBee() {
     return;
   }
 
+  applyPointerSteering();
+
   const prevX = bee.x;
   const prevY = bee.y;
 
@@ -1685,7 +1818,7 @@ function updateBee() {
 
   if (collision === "lose") {
     gameState = "lost";
-    statusEl.textContent = `You lost! Press R to try ${levelName()} again from honeycomb 1.`;
+    statusEl.textContent = `You lost! ${actionHint("Press R", "Tap the screen")} to try ${levelName()} again from honeycomb 1.`;
   } else if (collision === "win") {
     const bonus = getExtraFlowers() * 10;
     lastRoundPoints = POINTS_PER_ROUND + bonus;
@@ -1733,7 +1866,11 @@ function drawRoundWinOverlay() {
   ctx.fillStyle = "#558b2f";
   ctx.font = "22px Segoe UI, sans-serif";
   ctx.fillText(`Next: ${levelName()} honeycomb ${round + 1} of ${ROUNDS_PER_LEVEL}`, canvas.width / 2, canvas.height / 2 + 40);
-  ctx.fillText("Continuing automatically — or press SPACE", canvas.width / 2, canvas.height / 2 + 80);
+  ctx.fillText(
+    `Continuing automatically — or ${actionHint("press SPACE", "tap the screen")}`,
+    canvas.width / 2,
+    canvas.height / 2 + 80
+  );
 }
 
 function drawLoseOverlay() {
@@ -1749,7 +1886,11 @@ function drawLoseOverlay() {
   ctx.font = "22px Segoe UI, sans-serif";
   ctx.fillText("A fly-eating plant got the bee!", canvas.width / 2, canvas.height / 2 + 30);
   ctx.fillText(`You had cleared ${mazesCleared} honeycomb${mazesCleared === 1 ? "" : "s"}`, canvas.width / 2, canvas.height / 2 + 60);
-  ctx.fillText(`Press R to retry ${levelName()} from honeycomb 1`, canvas.width / 2, canvas.height / 2 + 90);
+  ctx.fillText(
+    `${actionHint("Press R", "Tap the screen")} to retry ${levelName()} from honeycomb 1`,
+    canvas.width / 2,
+    canvas.height / 2 + 90
+  );
 }
 
 function startWinParty() {
@@ -1867,10 +2008,29 @@ function drawWinOverlay() {
   ctx.fillStyle = "#558b2f";
   ctx.fillText(`All 3 ${levelName()} honeycombs cleared`, 0, 98);
   if (level >= STORY_LEVELS) {
-    ctx.fillText("Next maze soon — or press SPACE", 0, 122);
+    ctx.fillText(`Next maze soon — or ${actionHint("press SPACE", "tap the screen")}`, 0, 122);
   } else {
     ctx.fillText(`Next level: ${levelName(level + 1)} — fly through 3 more honeycombs`, 0, 122);
   }
+  ctx.restore();
+}
+
+function drawPointerTarget() {
+  if (!pointerSteer.active || gameState !== "playing") {
+    return;
+  }
+  ctx.save();
+  ctx.fillStyle = "rgba(255, 236, 179, 0.32)";
+  ctx.strokeStyle = "rgba(255, 167, 38, 0.8)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(pointerSteer.x, pointerSteer.y, 20, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(pointerSteer.x, pointerSteer.y, 5, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255, 143, 0, 0.85)";
+  ctx.fill();
   ctx.restore();
 }
 
@@ -1884,6 +2044,7 @@ function draw() {
     drawFlower(specialFlower);
   }
   drawBee();
+  drawPointerTarget();
 
   if (gameState === "levelComplete") {
     drawWinOverlay();
